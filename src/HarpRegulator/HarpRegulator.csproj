@@ -6,6 +6,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Bonsai.Harp" Version="3.6.1" />
+    <PackageReference Include="System.IO.Ports" Version="9.0.6" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Harp.Devices\Harp.Devices.csproj" />
     <ProjectReference Include="..\Harp.Protocol\Harp.Protocol.csproj" />
     <ProjectReference Include="..\PicobootConnection\PicobootConnection.csproj" />

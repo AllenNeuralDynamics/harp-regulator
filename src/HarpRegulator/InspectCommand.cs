@@ -192,6 +192,38 @@ internal sealed class InspectCommand : CommandBase
 
             return CommandResult.Success;
         }
+        else if (HexFileHelper.IsHexFile(filePath))
+        {
+            try
+            {
+                var firmware = HexFileHelper.LoadFirmware(filePath);
+                
+                if (useJson)
+                {
+                    var info = new
+                    {
+                        FileType = "Intel HEX",
+                        Metadata = firmware.Metadata.ToString()
+                    };
+                    string json = JsonSerializer.Serialize(info, JsonOptions);
+                    Console.WriteLine(json);
+                }
+                else
+                {
+                    Console.WriteLine($"'{filePath}' is an Intel HEX firmware file for ATxmega-based Harp devices:");
+                    Console.WriteLine();
+                    Console.WriteLine($"Firmware metadata:");
+                    Console.WriteLine($"{firmware.Metadata}");
+                }
+
+                return CommandResult.Success;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error reading Intel HEX file: {ex.Message}");
+                return CommandResult.Failure;
+            }
+        }
         else
         {
             switch (Path.GetExtension(filePath).ToLowerInvariant())
@@ -205,7 +237,7 @@ internal sealed class InspectCommand : CommandBase
                 case ".ihex":
                 case ".ihe":
                 case ".ihx":
-                    Console.Error.WriteLine($"Intel HEX files are not supported.");
+                    Console.Error.WriteLine($"'{filePath}' appears to be an Intel HEX file but could not be parsed.");
                     break;
                 default:
                     Console.Error.WriteLine($"'{filePath}' does not seem to be a supported format.");

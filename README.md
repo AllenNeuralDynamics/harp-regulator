@@ -4,9 +4,99 @@
 >
 > Noun. A person who maintains and tunes ("regulates") a harp.
 
-⚠ This tool is in alpha and relies on Harp specifications which have not been ratified. It will work for [Pico-based Harp devices](https://github.com/harp-tech/core.pico) in manual update mode, but most functionality requires special non-conforming firmware. See [Harp Toolkit](https://github.com/harp-tech/harp-cli) for the existing firmware update tool.
+⚠ This tool is in alpha and relies on Harp specifications which have not been ratified. 
 
-See the docs folder for micro-specifications that may need to be ratified as part of the Harp spec before this tool can be productized.
+This tool provides firmware management and device inspection capabilities for Harp devices based on multiple microcontroller architectures:
+- **Raspberry Pi Pico (RP2040/RP2350)**: Supports UF2 firmware files and PICOBOOT mode for Pico-based devices
+- **ATxmega**: Supports Intel HEX firmware files for ATxmega-based devices using the standard Harp bootloader
+
+## Features
+
+- **Device Enumeration**: List all connected Harp devices with detailed information
+- **Firmware Upload**: 
+  - Upload UF2 firmware to Pico-based devices
+  - Upload Intel HEX firmware to ATxmega-based devices
+- **Firmware Inspection**: Inspect and validate firmware files before uploading
+- **Device Inspection**: Query device information via Harp protocol
+
+## Commands
+
+### list
+Displays information about Harp devices connected to the system.
+
+```bash
+HarpRegulator list [--json] [--all[!]] [--allow-connect[!]]
+```
+
+### upload
+Uploads firmware to Harp devices. **Automatically detects device type** (Pico or ATxmega) based on firmware file format:
+- **UF2 files** → Pico-based devices
+- **Intel HEX files** → ATxmega-based devices
+
+```bash
+HarpRegulator upload <firmware-file> --target <device> [options]
+```
+
+Examples:
+```bash
+# Upload UF2 firmware to Pico device
+HarpRegulator upload firmware.uf2 --target COM3
+HarpRegulator upload firmware.uf2 --target PICOBOOT
+
+# Upload Intel HEX firmware to ATxmega device
+HarpRegulator upload firmware.hex --target COM4
+HarpRegulator upload firmware.hex --target /dev/ttyUSB0
+```
+
+### inspect
+Shows information about firmware files (supports both UF2 and Intel HEX formats).
+
+```bash
+HarpRegulator inspect <firmware-file> [--json]
+```
+
+### install-drivers
+Installs necessary USB drivers (Windows only).
+
+```bash
+HarpRegulator install-drivers
+```
+
+## Usage Examples
+
+### List all connected Harp devices
+```bash
+HarpRegulator list
+```
+
+### Upload firmware (auto-detects device type)
+```bash
+# Pico device with UF2 firmware
+HarpRegulator upload firmware.uf2 --target COM3
+HarpRegulator upload firmware.uf2 --target PICOBOOT
+
+# ATxmega device with Intel HEX firmware  
+HarpRegulator upload firmware.hex --target COM4
+HarpRegulator upload firmware.hex --target /dev/ttyUSB0
+
+# Force upload without compatibility checks
+HarpRegulator upload firmware.hex --target COM4 --force
+
+# Show progress during upload
+HarpRegulator upload firmware.hex --target COM4 --progress
+```
+
+### Inspect a firmware file
+```bash
+# Inspect UF2 firmware
+HarpRegulator inspect firmware.uf2
+
+# Inspect Intel HEX firmware
+HarpRegulator inspect firmware.hex
+
+# JSON output
+HarpRegulator inspect firmware.hex --json
+```
 
 ## Building
 

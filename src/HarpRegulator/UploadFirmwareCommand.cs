@@ -5,27 +5,33 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.IO;
+using System.IO.Ports;
 using System.Linq;
+using BonsaiHarp = Bonsai.Harp;
 
 namespace HarpRegulator;
 
 internal sealed partial class UploadFirmwareCommand : CommandBase
 {
     public override string Verb => "upload";
-    public override string Description => "Uploads firmware to a specific device.";
+    public override string Description => "Uploads firmware to a Harp device (automatically detects Pico or ATxmega).";
     public override string? UsageHelp => "upload <firmware-file-path> --target <device> [--[no-]interactive] [--allow-connect|--no-connect] [--[no-]progress] [--no-reboot] [--no-upload] [--force]";
 
     public override string? ArgumentsHelp =>
         $"""
         <firmware-file-path>
-            Path to a firmware blob in UF2 format to upload.
+            Path to a firmware file. Supports:
+            - UF2 format for Raspberry Pi Pico devices
+            - Intel HEX format for ATxmega devices
+            Device type is automatically detected from file format.
 
         --target <device>
             Targets a particular Harp device.
             <device> can be one of the following:
                 {(OperatingSystem.IsWindows() ? "A COM port (EG: \"COM3\"" : "A path to a serial port TTY device (EG: \"/dev/ttyUSB0\")")}
                 A device serial number in hex. Partial serial numbers accepted using prefix or suffix match.
-                "PICOBOOT" - The first available PICOBOOT device (IE: an Pico-based Harp device already in BOOTSEL mode.)
+                "PICOBOOT" - The first available PICOBOOT device (IE: a Pico-based Harp device already in BOOTSEL mode.)
 
         --interactive
         --no-interactive
@@ -143,11 +149,38 @@ internal sealed partial class UploadFirmwareCommand : CommandBase
             return CommandResult.ShowHelp;
         }
 
+        if (!File.Exists(firmwareFilePath))
+        {
+            Console.Error.WriteLine($"Firmware file not found: {firmwareFilePath}");
+            return CommandResult.Failure;
+        }
+
         // Don't prompt for Harp connections if we aren't running interactively
         if (!interactive && allowHarpConnection is null)
             allowHarpConnection = false;
 
-        // Load the UF2
+        // Detect firmware type and route to appropriate handler
+        bool isHexFile = HexFileHelper.IsHexFile(firmwareFilePath);
+        bool isUf2File = Uf2File.IsUf2File(firmwareFilePath);
+
+        if (!isHexFile && !isUf2File)
+        {
+            Console.Error.WriteLine($"Unsupported firmware file format: {Path.GetExtension(firmwareFilePath)}");
+            Console.Error.WriteLine("Supported formats:");
+            Console.Error.WriteLine("  - UF2 (for Raspberry Pi Pico devices)");
+            Console.Error.WriteLine("  - Intel HEX (for ATxmega devices)");
+            return CommandResult.Failure;
+        }
+
+        if (isHexFile)
+        {
+            // Handle ATxmega device upload
+            Console.WriteLine($"Detected Intel HEX firmware file for ATxmega device.");
+            return UploadATxmegaFirmware(firmwareFilePath, targetFilter, interactive, showProgress, force);
+        }
+
+        // Handle Pico device upload (UF2)
+        Console.WriteLine($"Detected UF2 firmware file for Raspberry Pi Pico device.");
         Uf2File file = new(firmwareFilePath);
 
         // Find target device
@@ -160,10 +193,11 @@ internal sealed partial class UploadFirmwareCommand : CommandBase
         ListDevicesCommand.ListDevices([device]);
         Console.WriteLine();
 
-        if (device.Kind != DeviceKind.Pico)
+        if (device.Kind != DeviceKind.Pico && device.Kind != DeviceKind.Unknown)
         {
-            Console.Error.WriteLine("Harp Regulator currently only supports Pico devices.");
-            return CommandResult.Failure;
+            Console.Error.WriteLine($"Target device appears to be {device.Kind}, but UF2 firmware is for Pico devices.");
+            if (!force && (!interactive || !YesNo("Continue anyway?", defaultChoice: false)))
+                return CommandResult.Failure;
         }
 
         // Find the appropriate UF2 view for the device
@@ -402,6 +436,147 @@ internal sealed partial class UploadFirmwareCommand : CommandBase
             }
 
             Console.WriteLine($"Upload completed in {Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds:N} seconds");
+        }
+    }
+
+    /// <summary>
+    /// Uploads Intel HEX firmware to an ATxmega-based Harp device.
+    /// </summary>
+    private CommandResult UploadATxmegaFirmware(string firmwareFilePath, string targetFilter, bool interactive, bool showProgress, bool force)
+    {
+        // For ATxmega devices, the target should be a serial port
+        string portName = targetFilter;
+
+        // Check if the port exists
+        string[] availablePorts = SerialPort.GetPortNames();
+        if (!availablePorts.Contains(portName))
+        {
+            Console.Error.WriteLine($"Serial port '{portName}' not found.");
+            Console.WriteLine($"Available ports: {string.Join(", ", availablePorts)}");
+            
+            if (!interactive)
+                return CommandResult.Failure;
+            
+            Console.WriteLine();
+            Console.Write($"Enter the serial port for the ATxmega device: ");
+            string? input = Console.ReadLine();
+            if (string.IsNullOrWhiteSpace(input) || !availablePorts.Contains(input))
+            {
+                Console.Error.WriteLine("Invalid port specified.");
+                return CommandResult.Failure;
+            }
+            portName = input;
+        }
+
+        // Load the firmware
+        BonsaiHarp.DeviceFirmware firmware;
+        try
+        {
+            firmware = HexFileHelper.LoadFirmware(firmwareFilePath);
+            Console.WriteLine($"Loaded firmware: {firmware.Metadata}");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Failed to load firmware file: {ex.Message}");
+            return CommandResult.Failure;
+        }
+
+        // Verify device compatibility if not forcing
+        if (!force)
+        {
+            Console.WriteLine($"Connecting to device on {portName} to verify compatibility...");
+            if (!VerifyATxmegaDeviceCompatibility(portName, firmware))
+            {
+                if (interactive && YesNo("Device verification failed. Continue anyway?", defaultChoice: false))
+                {
+                    Console.WriteLine("Continuing with forced upload...");
+                }
+                else
+                {
+                    Console.Error.WriteLine("Upload aborted. Use --force to override compatibility checks.");
+                    return CommandResult.Failure;
+                }
+            }
+            else
+            {
+                Console.WriteLine("Device compatibility verified.");
+            }
+        }
+
+        // Upload firmware
+        Console.WriteLine($"Uploading firmware to {portName}...");
+        
+        try
+        {
+            var progress = new Progress<int>(percent =>
+            {
+                if (showProgress)
+                {
+                    Console.CursorLeft = 0;
+                    const int Length = 30;
+                    Console.Write("[");
+                    var p = percent * Length / 100;
+                    for (int i = 0; i < Length; i++)
+                    {
+                        Console.Write(i < p ? '=' : ' ');
+                    }
+                    Console.Write("] {0,3:##0}%", percent);
+                }
+            });
+
+            // Use Bonsai.Harp's Bootloader to upload firmware
+            BonsaiHarp.Bootloader.UpdateFirmwareAsync(portName, firmware, force, progress).Wait();
+            
+            if (showProgress)
+                Console.WriteLine();
+            
+            Console.WriteLine($"Successfully uploaded firmware to {portName}");
+            Console.WriteLine("The device should now reboot with the new firmware.");
+            return CommandResult.Success;
+        }
+        catch (Exception ex)
+        {
+            if (showProgress)
+                Console.WriteLine();
+            Console.Error.WriteLine($"Firmware upload failed: {ex.Message}");
+            if (VerboseMode && ex.InnerException is not null)
+                Console.Error.WriteLine($"Inner exception: {ex.InnerException.Message}");
+            return CommandResult.Failure;
+        }
+    }
+
+    private bool VerifyATxmegaDeviceCompatibility(string portName, BonsaiHarp.DeviceFirmware firmware)
+    {
+        try
+        {
+            using var device = new BonsaiHarp.AsyncDevice(portName);
+            
+            // Try to read basic device info
+            var whoAmITask = device.ReadWhoAmIAsync();
+            if (whoAmITask.Wait(1000))
+            {
+                int whoAmI = whoAmITask.Result;
+                Console.WriteLine($"Device WhoAmI: {whoAmI}");
+                
+                // Check if firmware has WhoAmI in its metadata
+                string metadataStr = firmware.Metadata.ToString();
+                if (metadataStr.Contains("WhoAmI"))
+                {
+                    Console.WriteLine($"Firmware metadata: {metadataStr}");
+                }
+                
+                return true;
+            }
+            else
+            {
+                Console.Error.WriteLine($"Timeout while trying to communicate with device on {portName}");
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Could not verify device compatibility: {ex.Message}");
+            return false;
         }
     }
 }
