@@ -103,7 +103,7 @@ internal sealed class ListDevicesCommand : CommandBase
     {
         output ??= Console.Out;
         List<string[]> rows = new(devices.Length + 1);
-        rows.Add(["Port", "Serial", "Kind", "Status", "WhoAmI", "Description", "Firmware"]);
+        rows.Add(["Port", "Serial", "Kind", "Status", "WhoAmI", "Description", "Hardware", "Firmware"]);
 
         foreach (Device device in devices)
         {
@@ -124,6 +124,7 @@ internal sealed class ListDevicesCommand : CommandBase
                     },
                     device.WhoAmI?.ToString() ?? "N/A",
                     device.DeviceDescription ?? "N/A",
+                    device.HardwareVersion?.ToString() ?? "N/A",
                     device.FirmwareVersion?.ToString() ?? "N/A",
                 ]
             );

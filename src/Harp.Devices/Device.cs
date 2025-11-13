@@ -20,6 +20,7 @@ public sealed partial record Device
     public ushort? WhoAmI { get; init; }
     public string? DeviceDescription { get; init; }
     public ulong? SerialNumber { get; init; }
+    public HarpVersion? HardwareVersion { get; init; }
     public HarpVersion? FirmwareVersion { get; init; }
 
     /// <summary>Human-readable descpiption describing the origin of this device during enumeration.</summary>
@@ -180,6 +181,14 @@ public sealed partial record Device
 
             ushort? whoAmI = WhoAmI ?? ReadRegisterValueOrNull<ushort>(CommonRegister.R_WHO_AM_I);
 
+            HarpVersion? hardwareVersion = HardwareVersion;
+            if (hardwareVersion is null
+                && ReadRegisterValueOrNull<byte>(CommonRegister.R_HW_VERSION_H) is byte hwMajor
+                && ReadRegisterValueOrNull<byte>(CommonRegister.R_HW_VERSION_L) is byte hwMinor)
+            {
+                hardwareVersion = new HarpVersion(hwMajor, hwMinor, 0);
+            }
+
             HarpVersion? firmwareVersion = FirmwareVersion;
             if (firmwareVersion is null
                 && ReadRegisterValueOrNull<byte>(CommonRegister.R_FW_VERSION_H) is byte versionMajor
@@ -224,6 +233,7 @@ public sealed partial record Device
             {
                 State = DeviceState.Online,
                 WhoAmI = whoAmI,
+                HardwareVersion = hardwareVersion,
                 FirmwareVersion = firmwareVersion,
                 DeviceDescription = deviceDescription,
                 SerialNumber = serialNumber,
