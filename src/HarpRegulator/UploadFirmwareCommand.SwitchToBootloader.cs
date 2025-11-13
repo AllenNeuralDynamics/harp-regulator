@@ -49,11 +49,29 @@ partial class UploadFirmwareCommand
 
         // Find our device again now that it's in picoboot mode
         Console.WriteLine("Finding device again now that it's in BOOTSEL mode...");
-        Thread.Sleep(1000); // Wait for bootloader to become available
-
+        
         string? serialNumberFilter = device.SerialNumber?.ToString("x");
-        allDevices = Device.EnumerateDevices(allowConnection: null);
-        ImmutableArray<Device> bootselDevices = allDevices.Filter(d => d.Kind == DeviceKind.Pico && d.State is DeviceState.Bootloader);
+        ImmutableArray<Device> bootselDevices = [];
+        
+        // Retry with increasing delays to give Windows time to enumerate the device
+        int[] retryDelaysMs = [1000, 2000, 3000];
+        foreach (int delayMs in retryDelaysMs)
+        {
+            Thread.Sleep(delayMs);
+            allDevices = Device.EnumerateDevices(allowConnection: null);
+            bootselDevices = allDevices.Filter(d => d.Kind == DeviceKind.Pico && d.State is DeviceState.Bootloader);
+            
+            if (bootselDevices.Length > 0)
+            {
+                Console.WriteLine($"Found {bootselDevices.Length} BOOTSEL device(s) after {delayMs}ms");
+                break;
+            }
+            else
+            {
+                Console.WriteLine($"No BOOTSEL devices found after {delayMs}ms, retrying...");
+            }
+        }
+        
         device = null;
 
         if (serialNumberFilter is not null)
@@ -79,6 +97,13 @@ partial class UploadFirmwareCommand
                     break;
                 case 0:
                     Console.Error.WriteLine("Could not find any devices in BOOTSEL mode");
+                    
+                    if (allDevices.Length > 0)
+                    {
+                        Console.Error.WriteLine($"Found {allDevices.Length} device(s), but none in BOOTSEL mode:");
+                        ListDevicesCommand.ListDevices(allDevices, output: Console.Error);
+                    }
+                    
                     if (allDevices.Any(d => d.State == DeviceState.DriverError))
                     {
                         Console.Error.WriteLine("One or more devices has a driver in an erroneous state.");
@@ -134,37 +159,31 @@ partial class UploadFirmwareCommand
                     Console.WriteLine();
                 }
 
-                // Determine if the device supports automated firmware updating
-                const CommonRegister register = CommonRegister.R_FIRMWARE_UPDATE_CAPABILITIES;
-                HarpMessage<uint> response = harp.Read<uint>(register);
-                if (!response.IsValid)
-                    return $"Got an invalid repsonse when trying to read {register}.";
-                else if (response.MessageType == MessageType.ReadError)
-                    return $"Device does not support {register}.";
-                else if (response.MessageType != MessageType.Read)
-                    return $"Device responded with unexpected {response.MessageType} message when reading {register}.";
-                else if (response.Payload.Length < 1)
-                    return $"Device response when reading {register} was empty.";
-                else if (response.PayloadType.Type != typeof(uint))
-                    return $"Expected {PayloadType.GetType<uint>()} but got {response.PayloadType} when reading {register}.";
-
-                FirmwareUpdateCapabilities capabilities = (FirmwareUpdateCapabilities)response.Payload[0];
-
-                if (capabilities == FirmwareUpdateCapabilities.None)
-                    return $"Device is not capable of automated firmware updates.";
-
-                if (!capabilities.HasFlag(FirmwareUpdateCapabilities.FIRMWARE_UPDATE_PICO_BOOTSEL))
-                    return $"Device is not capable of automaticed firmware update methods we support.";
-
-                // Reboot the device into BOOTSEL mode
-                Console.WriteLine("Instructing device to reobot into BOOTSEL mode...");
-                harp.Write(CommonRegister.R_FIRMWARE_UPDATE_START_COMMAND, (uint)FirmwareUpdateCapabilities.FIRMWARE_UPDATE_PICO_BOOTSEL);
-                //TODO: Validate response
+                // Reboot the device into BOOTSEL mode using R_RESET_DEV register
+                // Bit 5 (RST_DFU_OFFSET) triggers reset_usb_boot(0,0) in Pico firmware
+                Console.WriteLine("Instructing device to reboot into BOOTSEL mode...");
+                const byte RST_DFU_BIT = 0b00100000; // Bit 5 set
+                
+                try
+                {
+                    harp.Write(CommonRegister.R_RESET_DEV, RST_DFU_BIT);
+                    //TODO: Validate response if we get one
+                }
+                catch (TimeoutException)
+                {
+                    // This is expected - the device reboots immediately and can't send a response
+                    Console.WriteLine("Device disconnected (expected behavior during reboot)");
+                }
+                catch (OperationCanceledException)
+                {
+                    // This is also expected - the serial port is disconnected during reboot
+                    Console.WriteLine("Device disconnected (expected behavior during reboot)");
+                }
             }
 
             return null;
         }
         catch (Exception ex)
-        { return $"An exception ocurred while trying to reboot: {ex}"; }
+        { return $"An exception occurred while trying to reboot: {ex}"; }
     }
 }
