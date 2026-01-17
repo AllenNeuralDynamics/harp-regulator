@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Ports;
 using System.Linq;
+using System.Threading;
 using BonsaiHarp = Bonsai.Harp;
 
 namespace HarpRegulator;
@@ -262,24 +263,69 @@ internal sealed partial class UploadFirmwareCommand : CommandBase
         {
             deviceStartedOnline = true;
             if (!SwitchToBootloader(ref allDevices, ref device, interactive, force))
+            {
+                // SwitchToBootloader failed - try mass storage fallback before giving up
+                if (OperatingSystem.IsWindows())
+                {
+                    Console.WriteLine("Attempting mass storage fallback...");
+                    string? fallbackDrive = PicoMassStorageHelper.FindPicoDrive();
+                    if (fallbackDrive is not null)
+                    {
+                        Console.WriteLine($"Found Pico mass storage drive at {fallbackDrive}");
+                        if (!VerifyFirmwareCompatibilityForMassStorage(view, interactive, force))
+                            return CommandResult.Failure;
+                        return UploadFirmwareViaMassStorage(firmwareFilePath, fallbackDrive, showProgress);
+                    }
+                }
                 return CommandResult.Failure;
+            }
         }
 
-        // Fail if the device cannot be communicated with
-        if (device.State == DeviceState.DriverError)
+        // Check if we can communicate with the device via picoboot, or need mass storage fallback
+        // This handles both:
+        // 1. Devices that successfully rebooted but have driver issues (DriverError state)
+        // 2. Devices that were already in BOOTSEL mode with driver issues (e.g., --target PICOBOOT)
+        if (device.State == DeviceState.DriverError || device.PicobootDevice is null)
         {
-            Console.Error.WriteLine("Cannot communicate with the device, driver is in an erroneous state.");
-            Console.Error.WriteLine("    Try running `HarpRegulator install-drivers` as admin.");
-            return CommandResult.Failure;
+            if (OperatingSystem.IsWindows())
+            {
+                // Try to find the mass storage drive as a fallback
+                Console.WriteLine("PICOBOOT interface unavailable, searching for mass storage drive...");
+                string? massStorageDrive = PicoMassStorageHelper.FindPicoDrive();
+
+                if (massStorageDrive is not null)
+                {
+                    Console.WriteLine($"Found Pico mass storage drive at {massStorageDrive}");
+                    string? deviceInfo = PicoMassStorageHelper.ReadDeviceInfo(massStorageDrive);
+                    if (deviceInfo is not null)
+                    {
+                        Trace.WriteLine($"Device info from INFO_UF2.TXT:");
+                        foreach (string line in deviceInfo.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                            Trace.WriteLine($"  {line.Trim()}");
+                    }
+                    if (!VerifyFirmwareCompatibilityForMassStorage(view, interactive, force))
+                        return CommandResult.Failure;
+                    return UploadFirmwareViaMassStorage(firmwareFilePath, massStorageDrive, showProgress);
+                }
+                else
+                {
+                    Console.Error.WriteLine("Cannot communicate with the device via PICOBOOT and no mass storage drive found.");
+                    if (device.State == DeviceState.DriverError)
+                        Console.Error.WriteLine("    Try running `HarpRegulator install-drivers` as admin.");
+                    else
+                        Console.Error.WriteLine("    --verbose may provide more details.");
+                    return CommandResult.Failure;
+                }
+            }
+            else
+            {
+                Console.Error.WriteLine("Cannot communicate with the device, driver is in an erroneous state.");
+                Console.Error.WriteLine("    --verbose may provide more details.");
+                return CommandResult.Failure;
+            }
         }
 
-        // Fail if there's not Picoboot interface
-        if (device.PicobootDevice is null)
-        {
-            Console.Error.WriteLine("Cannot communicate with the device, the PICOBOOT interface was not instantiated.");
-            Console.Error.WriteLine("    --verbose may provide more details.");
-            return CommandResult.Failure;
-        }
+        Debug.Assert(device.PicobootDevice is not null);
 
         // Check if the firmware is applicable to this device
         if (!VerifyFirmwareCompatibility(device, view, interactive, force))
@@ -577,6 +623,91 @@ internal sealed partial class UploadFirmwareCommand : CommandBase
         {
             Console.Error.WriteLine($"Could not verify device compatibility: {ex.Message}");
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Uploads UF2 firmware to a Pico device via the USB mass storage interface.
+    /// This is a fallback method used when the PICOBOOT interface is unavailable (e.g., WinUSB driver not installed).
+    /// </summary>
+    private CommandResult UploadFirmwareViaMassStorage(string firmwareFilePath, string drivePath, bool showProgress)
+    {
+        Console.WriteLine($"Uploading firmware via mass storage interface to {drivePath}...");
+        Console.WriteLine("(Using fallback method - PICOBOOT interface not available)");
+
+        long startTimestamp = Stopwatch.GetTimestamp();
+
+        try
+        {
+            FileInfo sourceFile = new(firmwareFilePath);
+            double sizeKibibytes = (double)sourceFile.Length / 1024.0;
+            Console.WriteLine($"Copying {Path.GetFileName(firmwareFilePath)} ({sizeKibibytes:N1} KiB)...");
+
+            using ProgressBar<double> progress = new(sizeKibibytes, "KiB", isEnabled: showProgress);
+            double lastReportedKiB = 0;
+
+            bool success = PicoMassStorageHelper.UploadFirmware(drivePath, firmwareFilePath, (copied, total) =>
+            {
+                double copiedKiB = (double)copied / 1024.0;
+                if (copiedKiB > lastReportedKiB)
+                {
+                    progress.ReportProgress(copiedKiB - lastReportedKiB);
+                    lastReportedKiB = copiedKiB;
+                }
+            });
+
+            if (success)
+            {
+                Console.WriteLine($"Upload completed in {Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds:N1} seconds");
+                Console.WriteLine("The device will now reboot with the new firmware.");
+
+                // Give the device a moment to reboot
+                Thread.Sleep(500);
+
+                // Verify the drive has disappeared (indicating successful reboot)
+                if (!Directory.Exists(drivePath))
+                {
+                    Console.WriteLine("Device rebooted successfully.");
+                }
+                else
+                {
+                    Console.WriteLine("Note: Mass storage drive is still present. Device may need manual reset.");
+                }
+
+                return CommandResult.Success;
+            }
+            else
+            {
+                Console.Error.WriteLine("Firmware upload failed.");
+                return CommandResult.Failure;
+            }
+        }
+        catch (IOException ex)
+        {
+            // IOException during copy is often expected - the device reboots mid-copy
+            Trace.WriteLine($"IOException during mass storage upload: {ex.Message}");
+
+            // Wait a moment and check if the drive disappeared (indicating successful upload + reboot)
+            Thread.Sleep(1000);
+
+            if (!Directory.Exists(drivePath))
+            {
+                Console.WriteLine($"Upload completed in {Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds:N1} seconds");
+                Console.WriteLine("Device rebooted successfully with new firmware.");
+                return CommandResult.Success;
+            }
+            else
+            {
+                Console.Error.WriteLine($"Firmware upload failed: {ex.Message}");
+                return CommandResult.Failure;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Firmware upload failed: {ex.Message}");
+            if (VerboseMode)
+                Console.Error.WriteLine(ex.ToString());
+            return CommandResult.Failure;
         }
     }
 }

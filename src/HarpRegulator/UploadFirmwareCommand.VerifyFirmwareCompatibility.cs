@@ -178,4 +178,81 @@ partial class UploadFirmwareCommand
         else
         { throw new UnreachableException(); }
     }
+
+    /// <summary>
+    /// Performs limited firmware compatibility verification when using the mass storage fallback.
+    /// Since we don't have access to the PICOBOOT interface, we can only verify firmware-side information.
+    /// </summary>
+    /// <returns>True if the upload should continue, false otherwise.</returns>
+    private bool VerifyFirmwareCompatibilityForMassStorage(Uf2View view, bool interactive, bool force)
+    {
+        Console.WriteLine();
+        Console.WriteLine("Note: Using mass storage fallback - limited firmware verification available.");
+        Console.WriteLine("      (Cannot verify device characteristics without PICOBOOT interface)");
+        Console.WriteLine();
+
+        PicoFirmwareInfo firmwareInfo = PicoFirmwareInfo.GetInfo(view);
+        Device firmwareDevice = new Device()
+        {
+            Source = view.ToString(),
+            Kind = view.FamilyId.ToDeviceKind()
+        }.WithMetadataFromFirmwareInfo(firmwareInfo);
+
+        Console.WriteLine("Firmware characteristics:");
+        Console.WriteLine($"         WhoAmI: {firmwareDevice.WhoAmI?.ToString() ?? "N/A"}");
+        Console.WriteLine($"    Description: {firmwareDevice.DeviceDescription ?? "N/A"}");
+        Console.WriteLine($"        Version: {firmwareDevice.FirmwareVersion?.ToString() ?? "N/A"}");
+        Trace.WriteLine($"    Device kind: {firmwareDevice.Kind}");
+        Trace.WriteLine($"     Pico model: {view.FamilyId.ToPicoModel().FriendlyName()}");
+
+        bool hasWarnings = false;
+
+        if (!firmwareInfo.HaveInfo)
+        {
+            Console.WriteLine();
+            ConsoleColor oldColor = Console.ForegroundColor;
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("⚠ Warning: Firmware does not have embedded firmware info!");
+            Console.WriteLine("           Cannot verify if it is Harp firmware or check WhoAmI.");
+            Console.ForegroundColor = oldColor;
+            hasWarnings = true;
+        }
+        else if (firmwareDevice.Confidence != DeviceConfidence.High)
+        {
+            Console.WriteLine();
+            ConsoleColor oldColor = Console.ForegroundColor;
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("⚠ Warning: Firmware does not appear to be Harp firmware!");
+            Console.ForegroundColor = oldColor;
+            hasWarnings = true;
+        }
+
+        Console.WriteLine();
+
+        if (!hasWarnings)
+        {
+            Console.WriteLine("Firmware appears to be valid Harp firmware.");
+            return true;
+        }
+        else if (force)
+        {
+            Console.WriteLine("Force mode enabled, proceeding despite warnings.");
+            return true;
+        }
+        else if (interactive)
+        {
+            if (YesNo("Continue with the firmware upload despite the above warning(s)?", defaultChoice: false))
+                return true;
+            else
+            {
+                Console.Error.WriteLine("Upload aborted.");
+                return false;
+            }
+        }
+        else
+        {
+            Console.Error.WriteLine("Non-interactive mode: use --force to proceed despite warnings.");
+            return false;
+        }
+    }
 }
