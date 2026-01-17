@@ -68,6 +68,18 @@ These devices can be regarded as Low Confidence ATxmega-based Harp devices.
 
 *(Non-normative: The idea behind Low Confidence device identificaiton is to help migrate older devices to conform to this specification.)*
 
+### FTDI devices and Harp protocol identification
+
+FTDI-based devices that do not have Harp metadata in their USB descriptor can be identified as ATxmega devices by connecting to them using the Harp protocol.
+
+When running `HarpRegulator list --allow-connect`, the application will attempt to connect to FTDI devices and read their WhoAmI register. If successful:
+
+* The device is promoted from `FTDI` to `ATxmega` kind
+* The confidence is promoted to `High`
+* Additional metadata (WhoAmI, DeviceName, FirmwareVersion, SerialNumber) is populated
+
+This approach mirrors how `harp-tech/toolkit` and `Bonsai.Harp` identify devices - by connecting to each serial port and reading Harp protocol registers.
+
 ### Unknown ATxmega device
 
 An Unknown FTDI-based device is promoted to an Unknown-state ATxmega device with high confidence if it meets the USB descriptor specification described below.

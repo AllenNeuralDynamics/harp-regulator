@@ -14,12 +14,17 @@ public sealed class HarpConnection : IDisposable
     private int WriteHead = 0;
     private int ReadHead = 0;
 
+    /// <summary>The standard baud rate for Harp devices (1 Mbps)</summary>
+    public const int DefaultBaudRate = 1000000;
+
     public HarpConnection(string portName, int timeoutMilliseconds = SerialPort.InfiniteTimeout)
     {
-        Port = new SerialPort(portName, 115200)
+        Port = new SerialPort(portName, DefaultBaudRate, Parity.None, 8, StopBits.One)
         {
             ReadTimeout = timeoutMilliseconds,
             WriteTimeout = timeoutMilliseconds,
+            Handshake = Handshake.RequestToSend,
+            DtrEnable = true,
         };
         Port.Open();
 

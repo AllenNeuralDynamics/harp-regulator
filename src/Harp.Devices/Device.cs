@@ -138,7 +138,12 @@ public sealed partial record Device
 
     private Device __WithMetadataFromHarpProtocol(HarpConnection? harp)
     {
-        Debug.Assert(State is DeviceState.Online or DeviceState.Unknown); // We don't expect other states to reach this method
+        // We don't expect other states to reach this method
+        if (State is not (DeviceState.Online or DeviceState.Unknown))
+        {
+            Trace.WriteLine($"Skipping Harp protocol metadata retrieval for {PortName} because it's in state {State}.");
+            return this;
+        }
 
         // Used to improve exception messages
         CommonRegister? currentlyReading = null;
@@ -152,7 +157,7 @@ public sealed partial record Device
                 harp = new HarpConnection
                 (
                     PortName ?? throw new InvalidOperationException("Cannot get metadata from a device without a serial port to connect to."),
-                    timeoutMilliseconds: 500
+                    timeoutMilliseconds: 5000
                 );
             }
 
@@ -229,8 +234,21 @@ public sealed partial record Device
                 }
             }
 
+            // Determine if this should be promoted to an ATxmega device
+            // FTDI devices that successfully respond to Harp protocol are ATxmega-based Harp devices
+            DeviceKind kind = Kind;
+            DeviceConfidence confidence = Confidence;
+            if (Kind is DeviceKind.FTDI or DeviceKind.Unknown && whoAmI is not null)
+            {
+                kind = DeviceKind.ATxmega;
+                confidence = confidence.PromoteTo(DeviceConfidence.High);
+                Trace.WriteLine($"Device on {PortName} responded to Harp protocol with WhoAmI={whoAmI}, promoting to ATxmega.");
+            }
+
             return this with
             {
+                Kind = kind,
+                Confidence = confidence,
                 State = DeviceState.Online,
                 WhoAmI = whoAmI,
                 HardwareVersion = hardwareVersion,
@@ -326,6 +344,10 @@ public sealed partial record Device
                     continue;
 
                 if (device.Confidence < connectionFilter)
+                    continue;
+
+                // Only connect to devices that are online or have unknown state
+                if (device.State is not (DeviceState.Online or DeviceState.Unknown))
                     continue;
 
                 Trace.WriteLine($"Populating {device.PortName}'s metadata via Harp registers.");
