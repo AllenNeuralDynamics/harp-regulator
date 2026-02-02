@@ -88,7 +88,22 @@ internal sealed class ListDevicesCommand : CommandBase
 
         if (useJson)
         {
-            string json = JsonSerializer.Serialize(devices.Where(d => d.Confidence >= deviceFilter), JsonOptions);
+            var devicesForJson = devices
+                .Where(d => d.Confidence >= deviceFilter)
+                .Select(d => new
+                {
+                    d.Confidence,
+                    d.Kind,
+                    d.State,
+                    d.PortName,
+                    d.WhoAmI,
+                    d.DeviceDescription,
+                    d.SerialNumber,
+                    d.HardwareVersion,
+                    d.FirmwareVersion,
+                    d.Source
+                });
+            string json = JsonSerializer.Serialize(devicesForJson, JsonOptions);
             Console.WriteLine(json);
             return CommandResult.Success;
         }
