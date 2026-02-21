@@ -60,6 +60,8 @@ internal abstract class CommandBase
         Converters = { new JsonStringEnumConverter() }
     };
 
+    protected static readonly HarpRegulatorJsonSerializerContext JsonContext = new(JsonOptions);
+
     protected static CommonArgumentResult TryHandleCommonArgument(string argument)
     {
         switch (argument.ToLowerInvariant())

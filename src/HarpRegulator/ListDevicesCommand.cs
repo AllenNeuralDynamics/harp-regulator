@@ -90,20 +90,21 @@ internal sealed class ListDevicesCommand : CommandBase
         {
             var devicesForJson = devices
                 .Where(d => d.Confidence >= deviceFilter)
-                .Select(d => new
+                .Select(d => new DeviceJsonInfo
                 {
-                    d.Confidence,
-                    d.Kind,
-                    d.State,
-                    d.PortName,
-                    d.WhoAmI,
-                    d.DeviceDescription,
-                    d.SerialNumber,
-                    d.HardwareVersion,
-                    d.FirmwareVersion,
-                    d.Source
-                });
-            string json = JsonSerializer.Serialize(devicesForJson, JsonOptions);
+                    Confidence = d.Confidence,
+                    Kind = d.Kind,
+                    State = d.State,
+                    PortName = d.PortName,
+                    WhoAmI = d.WhoAmI,
+                    DeviceDescription = d.DeviceDescription,
+                    SerialNumber = d.SerialNumber,
+                    HardwareVersion = d.HardwareVersion?.ToString(),
+                    FirmwareVersion = d.FirmwareVersion?.ToString(),
+                    Source = d.Source
+                })
+                .ToList();
+            string json = JsonSerializer.Serialize(devicesForJson, typeof(List<DeviceJsonInfo>), JsonContext);
             Console.WriteLine(json);
             return CommandResult.Success;
         }

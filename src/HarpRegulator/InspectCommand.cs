@@ -25,7 +25,7 @@ internal sealed class InspectCommand : CommandBase
             Formats the output using JSON.
         """;
 
-    private struct Uf2FamilyInfo
+    internal struct Uf2FamilyInfo
     {
         public AddressRange AddressRange { get; }
         public AddressRange? FlashRange { get; }
@@ -79,6 +79,17 @@ internal sealed class InspectCommand : CommandBase
         }
     }
 
+    internal sealed record Uf2FamilyJsonInfo
+    {
+        public AddressRange AddressRange { get; init; }
+        public AddressRange? FlashRange { get; init; }
+        public ImmutableSortedSet<memory_type>? MemoryTypes { get; init; }
+        public PicoFirmwareInfo PicoFirmwareInfo { get; init; }
+        public DeviceJsonInfo? DeviceInfo { get; init; }
+    }
+
+    internal readonly record struct HexInspectionJsonInfo(string FileType, string Metadata);
+
     public override CommandResult Execute(Queue<string> arguments)
     {
         string? filePath = null;
@@ -127,7 +138,7 @@ internal sealed class InspectCommand : CommandBase
         if (Uf2File.IsUf2File(filePath))
         {
             Uf2File uf2 = new(filePath);
-            Dictionary<Uf2FamilyId, Uf2FamilyInfo>? jsonInfos = useJson ? new(uf2.FamilyIds.Count) : null;
+            Dictionary<Uf2FamilyId, Uf2FamilyJsonInfo>? jsonInfos = useJson ? new(uf2.FamilyIds.Count) : null;
             bool first = true;
 
             if ((uf2.FamilyIds.Count > 1 || VerboseMode) && !useJson)
@@ -146,7 +157,32 @@ internal sealed class InspectCommand : CommandBase
 
                 if (useJson)
                 {
-                    jsonInfos?.Add(family, info);
+                    DeviceJsonInfo? harpInfo = null;
+                    if (info.HarpInfo is Device harpDevice)
+                    {
+                        harpInfo = new DeviceJsonInfo
+                        {
+                            Source = harpDevice.Source,
+                            Kind = harpDevice.Kind,
+                            State = harpDevice.State,
+                            Confidence = harpDevice.Confidence,
+                            PortName = harpDevice.PortName,
+                            WhoAmI = harpDevice.WhoAmI,
+                            DeviceDescription = harpDevice.DeviceDescription,
+                            SerialNumber = harpDevice.SerialNumber,
+                            HardwareVersion = harpDevice.HardwareVersion?.ToString(),
+                            FirmwareVersion = harpDevice.FirmwareVersion?.ToString(),
+                        };
+                    }
+
+                    jsonInfos?.Add(family, new Uf2FamilyJsonInfo
+                    {
+                        AddressRange = info.AddressRange,
+                        FlashRange = info.FlashRange,
+                        MemoryTypes = info.MemoryTypes,
+                        PicoFirmwareInfo = info.PicoFirmwareInfo,
+                        DeviceInfo = harpInfo,
+                    });
                     continue;
                 }
 
@@ -186,7 +222,7 @@ internal sealed class InspectCommand : CommandBase
 
             if (useJson)
             {
-                string json = JsonSerializer.Serialize(jsonInfos, JsonOptions);
+                string json = JsonSerializer.Serialize(jsonInfos!, typeof(Dictionary<Uf2FamilyId, Uf2FamilyJsonInfo>), JsonContext);
                 Console.WriteLine(json);
             }
 
@@ -200,12 +236,8 @@ internal sealed class InspectCommand : CommandBase
                 
                 if (useJson)
                 {
-                    var info = new
-                    {
-                        FileType = "Intel HEX",
-                        Metadata = firmware.Metadata.ToString()
-                    };
-                    string json = JsonSerializer.Serialize(info, JsonOptions);
+                    HexInspectionJsonInfo info = new("Intel HEX", firmware.Metadata.ToString());
+                    string json = JsonSerializer.Serialize(info, typeof(HexInspectionJsonInfo), JsonContext);
                     Console.WriteLine(json);
                 }
                 else
