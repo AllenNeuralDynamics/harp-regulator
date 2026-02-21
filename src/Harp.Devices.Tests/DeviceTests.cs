@@ -1,4 +1,6 @@
 ﻿using Xunit;
+using Harp.Protocol;
+using System.Runtime.CompilerServices;
 
 namespace Harp.Devices.Tests;
 
@@ -79,5 +81,44 @@ public sealed class DeviceTests
 
         device = device.WithMetadataFromUsbDescription(usbDescription);
         Assert.Equal(expectedDescription, device.DeviceDescription);
+    }
+
+    [Fact]
+    public void PayloadType_Int32_IsSignedButNotFloat()
+    {
+        PayloadType payloadType = PayloadType.GetType<int>();
+
+        Assert.True(payloadType.IsSigned);
+        Assert.False(payloadType.IsFloat);
+        Assert.Equal(typeof(int), payloadType.Type);
+    }
+
+    [Fact]
+    public void PayloadType_Float32_IsFloatButNotSigned()
+    {
+        PayloadType payloadType = PayloadType.GetType<float>();
+
+        Assert.False(payloadType.IsSigned);
+        Assert.True(payloadType.IsFloat);
+        Assert.Equal(typeof(float), payloadType.Type);
+    }
+
+    [Fact]
+    public void PayloadType_BothSignedAndFloat_IsInvalidButNonThrowingInTryGetType()
+    {
+        PayloadType payloadType = new(hasTimestamp: false, isSigned: true, isFloat: true, numBits: 16);
+
+        Assert.False(payloadType.TryGetType(out var type));
+        Assert.Null(type);
+    }
+
+    [Fact]
+    public void PayloadType_UnknownWidth_IsInvalidButNonThrowingInTryGetType()
+    {
+        PayloadType payloadType = Unsafe.BitCast<byte, PayloadType>(0x03);
+
+        Assert.Equal(24, payloadType.NumBits);
+        Assert.False(payloadType.TryGetType(out var type));
+        Assert.Null(type);
     }
 }

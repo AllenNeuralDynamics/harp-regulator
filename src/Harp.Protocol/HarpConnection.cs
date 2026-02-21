@@ -33,7 +33,12 @@ public sealed class HarpConnection : IDisposable
 #endif
     }
 
-    private HarpMessage DoTransaction(MessageType messageType, byte address, PayloadType payloadType, ReadOnlySpan<byte> rawPayload)
+    private HarpMessage DoTransaction(
+        MessageType messageType,
+        byte address,
+        PayloadType payloadType,
+        ReadOnlySpan<byte> rawPayload,
+        Type? expectedResponsePayloadType = null)
     {
         byte[] messageData = new byte[6 + rawPayload.Length];
 
@@ -136,6 +141,21 @@ public sealed class HarpConnection : IDisposable
             goto TryAgain;
         }
 
+        if (expectedResponsePayloadType is not null)
+        {
+            if (!message.PayloadType.TryGetType(out Type? receivedPayloadType))
+            {
+                Trace.WriteLine($"Got invalid payload type 0x{message.PayloadType.RawValue:X2} in response to {messageType} {(CommonRegister)address} transaction, trying again...");
+                goto TryAgain;
+            }
+
+            if (receivedPayloadType != expectedResponsePayloadType)
+            {
+                Trace.WriteLine($"Got {message.PayloadType} in response to {messageType} {(CommonRegister)address} transaction, expected {expectedResponsePayloadType.Name}; trying again...");
+                goto TryAgain;
+            }
+        }
+
         // Reset read/write head if there isn't any extra data left in the buffer
         if (ReadHead == WriteHead)
         {
@@ -151,7 +171,12 @@ public sealed class HarpConnection : IDisposable
 
     public HarpMessage<T> Read<T>(byte register)
         where T : unmanaged
-        => (HarpMessage<T>)DoTransaction(MessageType.Read, register, PayloadType.GetType<T>(), ReadOnlySpan<byte>.Empty);
+        => (HarpMessage<T>)DoTransaction(
+            MessageType.Read,
+            register,
+            PayloadType.GetType<T>(),
+            ReadOnlySpan<byte>.Empty,
+            expectedResponsePayloadType: typeof(T));
 
     public HarpMessage Write<T>(byte register, T value)
         where T : unmanaged
@@ -159,7 +184,7 @@ public sealed class HarpConnection : IDisposable
 
     public HarpMessage Write<T>(byte register, ReadOnlySpan<T> value)
         where T : unmanaged
-        => (HarpMessage<T>)DoTransaction(MessageType.Write, register, PayloadType.GetType<T>(), MemoryMarshal.Cast<T, byte>(value));
+        => DoTransaction(MessageType.Write, register, PayloadType.GetType<T>(), MemoryMarshal.Cast<T, byte>(value));
 
     public HarpMessage<T> Read<T>(CommonRegister register)
         where T : unmanaged

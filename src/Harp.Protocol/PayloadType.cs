@@ -11,7 +11,7 @@ public readonly struct PayloadType
     public bool HasTimestamp => (RawValue & (1 << 4)) != 0;
 
     public bool IsSigned => (RawValue & (1 << 7)) != 0;
-    public bool IsFloat => (RawValue & (1 << 7)) != 0;
+    public bool IsFloat => (RawValue & (1 << 6)) != 0;
     public int NumBits => (RawValue & 0b1111) * 8;
 
     public PayloadType(bool hasTimestamp, bool isSigned, bool isFloat, int numBits)
@@ -45,6 +45,15 @@ public readonly struct PayloadType
 
     private bool TryGetType([NotNullWhen(true)] out Type? type, bool throwIfInvalid)
     {
+        if (IsSigned && IsFloat)
+        {
+            if (throwIfInvalid)
+                throw new NotSupportedException($"{nameof(IsFloat)} and {nameof(IsSigned)} must not both be set.");
+
+            type = null;
+            return false;
+        }
+
         type = (IsSigned, IsFloat, NumBits) switch
         {
             (false, true, 8) => throwIfInvalid ? throw new NotSupportedException("8-bit floats are not supported") : null,
@@ -59,9 +68,10 @@ public readonly struct PayloadType
             (false, false, 16) => typeof(ushort),
             (false, false, 32) => typeof(uint),
             (false, false, 64) => typeof(ulong),
-            (true, true, _) => throw new NotSupportedException($"{nameof(IsFloat)} and {nameof(IsSigned)} must not both be set."),
             (_, _, 0) => throwIfInvalid ? throw new NotSupportedException("0-bit type is not supported") : null,
-            (_, _, _) => throw new UnreachableException(),
+            (_, _, _) => throwIfInvalid
+                ? throw new NotSupportedException($"Unsupported payload type 0x{RawValue:X2} ({NumBits}-bit, signed={IsSigned}, float={IsFloat}).")
+                : null,
         };
         return type is not null;
     }
