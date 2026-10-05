@@ -14,6 +14,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Harp.Devices\Harp.Devices.csproj" />
+    <ProjectReference Include="..\HarpRegulator\HarpRegulator.csproj" />
   </ItemGroup>
 
 </Project>

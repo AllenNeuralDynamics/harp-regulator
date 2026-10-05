@@ -19,7 +19,7 @@ internal sealed class InspectCommand : CommandBase
     public override string? ArgumentsHelp =>
         """
         <firmware-file-path>
-            Path to a firmware blob in UF2 format to inspect.
+            Path to firmware in UF2 or Intel HEX format to inspect.
 
         --json
             Formats the output using JSON.

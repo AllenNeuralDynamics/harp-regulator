@@ -1,5 +1,7 @@
 ﻿using Harp.Devices;
 using Harp.Devices.Pico;
+using Harp.Toolkit;
+using Harp.Toolkit.Firmware;
 using PicobootConnection;
 using System;
 using System.Collections.Generic;
@@ -9,7 +11,7 @@ using System.IO;
 using System.IO.Ports;
 using System.Linq;
 using System.Threading;
-using BonsaiHarp = Bonsai.Harp;
+using ATxmega = Harp.Toolkit.Firmware.ATxmega;
 
 namespace HarpRegulator;
 
@@ -53,13 +55,16 @@ internal sealed partial class UploadFirmwareCommand : CommandBase
 
         --no-reboot
             Do not reboot into the provided firmware once upload is complete.
+            Only supported for Pico uploads; ATxmega uploads always restart the device.
 
         --no-upload
             Do not actually upload the firmware to the device.
+            For ATxmega, validate the file without connecting to the device.
 
         --force
             Whether to force firmware upload even if things seem incorrect.
             (IE: WhoAmI mismatch, attempting to flash device which doesn't appear to be a Harp device.)
+            For ATxmega, skip device-name and hardware checks or recover a device in bootloader mode.
         """;
 
     public override CommandResult Execute(Queue<string> arguments)
@@ -177,7 +182,12 @@ internal sealed partial class UploadFirmwareCommand : CommandBase
         {
             // Handle ATxmega device upload
             Console.WriteLine($"Detected Intel HEX firmware file for ATxmega device.");
-            return UploadATxmegaFirmware(firmwareFilePath, targetFilter, interactive, showProgress, force);
+            if (doFirmwareUpload && !rebootAfterUpload)
+            {
+                Console.Error.WriteLine("--no-reboot is not supported for ATxmega uploads; the Toolkit bootloader always restarts the device.");
+                return CommandResult.Failure;
+            }
+            return UploadATxmegaFirmware(firmwareFilePath, targetFilter, interactive, showProgress, force, doFirmwareUpload);
         }
 
         // Handle Pico device upload (UF2)
@@ -488,8 +498,26 @@ internal sealed partial class UploadFirmwareCommand : CommandBase
     /// <summary>
     /// Uploads Intel HEX firmware to an ATxmega-based Harp device.
     /// </summary>
-    private CommandResult UploadATxmegaFirmware(string firmwareFilePath, string targetFilter, bool interactive, bool showProgress, bool force)
+    private CommandResult UploadATxmegaFirmware(string firmwareFilePath, string targetFilter, bool interactive, bool showProgress, bool force, bool doFirmwareUpload)
     {
+        ATxmega.DeviceFirmware firmware;
+        try
+        {
+            firmware = HexFileHelper.LoadFirmware(firmwareFilePath);
+            Console.WriteLine($"Loaded firmware: {firmware.Metadata}");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Failed to load firmware file: {ex.Message}");
+            return CommandResult.Failure;
+        }
+
+        if (!doFirmwareUpload)
+        {
+            Console.WriteLine("Firmware upload skipped (--no-upload). No device connection was made.");
+            return CommandResult.Success;
+        }
+
         // For ATxmega devices, the target should be a serial port
         string portName = targetFilter;
 
@@ -514,115 +542,66 @@ internal sealed partial class UploadFirmwareCommand : CommandBase
             portName = input;
         }
 
-        // Load the firmware
-        BonsaiHarp.DeviceFirmware firmware;
-        try
-        {
-            firmware = HexFileHelper.LoadFirmware(firmwareFilePath);
-            Console.WriteLine($"Loaded firmware: {firmware.Metadata}");
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"Failed to load firmware file: {ex.Message}");
-            return CommandResult.Failure;
-        }
-
-        // Verify device compatibility if not forcing
-        if (!force)
-        {
-            Console.WriteLine($"Connecting to device on {portName} to verify compatibility...");
-            if (!VerifyATxmegaDeviceCompatibility(portName, firmware))
-            {
-                if (interactive && YesNo("Device verification failed. Continue anyway?", defaultChoice: false))
-                {
-                    Console.WriteLine("Continuing with forced upload...");
-                }
-                else
-                {
-                    Console.Error.WriteLine("Upload aborted. Use --force to override compatibility checks.");
-                    return CommandResult.Failure;
-                }
-            }
-            else
-            {
-                Console.WriteLine("Device compatibility verified.");
-            }
-        }
-
-        // Upload firmware
         Console.WriteLine($"Uploading firmware to {portName}...");
-        
-        try
+
+        while (true)
         {
-            var progress = new Progress<int>(percent =>
+            UpdateStage stage = UpdateStage.Connect;
+            var progress = new ImmediateProgress<UpdateProgress>(update =>
             {
+                stage = update.Stage;
                 if (showProgress)
                 {
-                    Console.CursorLeft = 0;
+                    Console.Write("\r");
                     const int Length = 30;
                     Console.Write("[");
-                    var p = percent * Length / 100;
+                    var completed = update.Percent * Length / 100;
                     for (int i = 0; i < Length; i++)
                     {
-                        Console.Write(i < p ? '=' : ' ');
+                        Console.Write(i < completed ? '=' : ' ');
                     }
-                    Console.Write("] {0,3:##0}%", percent);
+                    Console.Write("] {0,3:##0}% {1,-10}", update.Percent, update.Stage);
                 }
             });
 
-            // Use Bonsai.Harp's Bootloader to upload firmware
-            BonsaiHarp.Bootloader.UpdateFirmwareAsync(portName, firmware, force, progress).Wait();
-            
-            if (showProgress)
-                Console.WriteLine();
-            
-            Console.WriteLine($"Successfully uploaded firmware to {portName}");
-            Console.WriteLine("The device should now reboot with the new firmware.");
-            return CommandResult.Success;
-        }
-        catch (Exception ex)
-        {
-            if (showProgress)
-                Console.WriteLine();
-            Console.Error.WriteLine($"Firmware upload failed: {ex.Message}");
-            if (VerboseMode && ex.InnerException is not null)
-                Console.Error.WriteLine($"Inner exception: {ex.InnerException.Message}");
-            return CommandResult.Failure;
-        }
-    }
+            try
+            {
+                ATxmega.Bootloader.UpdateFirmwareAsync(portName, firmware, force, timeout: 2000, progress: progress)
+                    .GetAwaiter().GetResult();
 
-    private bool VerifyATxmegaDeviceCompatibility(string portName, BonsaiHarp.DeviceFirmware firmware)
-    {
-        try
-        {
-            using var device = new BonsaiHarp.AsyncDevice(portName);
-            
-            // Try to read basic device info
-            var whoAmITask = device.ReadWhoAmIAsync();
-            if (whoAmITask.Wait(1000))
-            {
-                int whoAmI = whoAmITask.Result;
-                Console.WriteLine($"Device WhoAmI: {whoAmI}");
-                
-                // Check if firmware has WhoAmI in its metadata
-                string metadataStr = firmware.Metadata.ToString();
-                if (metadataStr.Contains("WhoAmI"))
+                if (showProgress)
+                    Console.WriteLine();
+
+                Console.WriteLine("Firmware written. Waiting for the device to restart...");
+                if (!FirmwareUpdate.WaitUntilReadyAsync(portName, timeout: 20000).GetAwaiter().GetResult())
                 {
-                    Console.WriteLine($"Firmware metadata: {metadataStr}");
+                    Console.Error.WriteLine("Firmware was written, but the device did not respond within 20 seconds.");
+                    return CommandResult.Failure;
                 }
-                
-                return true;
+
+                Console.WriteLine($"Successfully uploaded firmware to {portName}");
+                return CommandResult.Success;
             }
-            else
+            catch (Exception ex)
             {
-                Console.Error.WriteLine($"Timeout while trying to communicate with device on {portName}");
-                return false;
+                if (showProgress)
+                    Console.WriteLine();
+                Console.Error.WriteLine($"Firmware upload failed: {ex.Message}");
+                if (VerboseMode)
+                    Console.Error.WriteLine(ex.ToString());
+
+                if (!force && stage is UpdateStage.Connect or UpdateStage.Check)
+                {
+                    if (interactive && YesNo("Device verification failed. Continue anyway?", defaultChoice: false))
+                    {
+                        force = true;
+                        Console.WriteLine("Continuing with forced upload...");
+                        continue;
+                    }
+                    Console.Error.WriteLine("Upload aborted. Use --force to override compatibility checks or recover a device in bootloader mode.");
+                }
+                return CommandResult.Failure;
             }
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"Could not verify device compatibility: {ex.Message}");
-            return false;
         }
     }
 

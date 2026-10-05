@@ -44,9 +44,20 @@ HarpRegulator upload firmware.uf2 --target COM3
 HarpRegulator upload firmware.uf2 --target PICOBOOT
 
 # Upload Intel HEX firmware to ATxmega device
-HarpRegulator upload firmware.hex --target COM4
-HarpRegulator upload firmware.hex --target /dev/ttyUSB0
+HarpRegulator upload Behavior-fw3.3-harp1.15-hw2.0-ass0.hex --target COM4
+HarpRegulator upload Behavior-fw3.3-harp1.15-hw2.0-ass0.hex --target /dev/ttyUSB0
 ```
+
+ATxmega uploads use [Harp Toolkit](https://github.com/harp-tech/toolkit) Core 0.4.0.
+Intel HEX filenames must follow `<device>-fw<firmware>-harp<core>-hw<hardware>-ass<assembly>.hex`;
+metadata is read from the filename, not the image contents. Device name and hardware compatibility
+are checked before resetting the device. Use `--force` only for an intentional override or to
+recover a device already in bootloader mode. After writing, Regulator waits up to 20 seconds
+for the device to respond. `--no-upload` validates the file without connecting; `--no-reboot`
+is not supported for ATxmega uploads because Toolkit always restarts the device.
+
+Toolkit Core still depends on Bonsai.Harp transitively; this replaces Regulator's direct
+Bonsai API usage, not the underlying protocol dependency.
 
 ### inspect
 Shows information about firmware files (supports both UF2 and Intel HEX formats).
@@ -76,14 +87,14 @@ HarpRegulator upload firmware.uf2 --target COM3
 HarpRegulator upload firmware.uf2 --target PICOBOOT
 
 # ATxmega device with Intel HEX firmware  
-HarpRegulator upload firmware.hex --target COM4
-HarpRegulator upload firmware.hex --target /dev/ttyUSB0
+HarpRegulator upload Behavior-fw3.3-harp1.15-hw2.0-ass0.hex --target COM4
+HarpRegulator upload Behavior-fw3.3-harp1.15-hw2.0-ass0.hex --target /dev/ttyUSB0
 
 # Force upload without compatibility checks
-HarpRegulator upload firmware.hex --target COM4 --force
+HarpRegulator upload Behavior-fw3.3-harp1.15-hw2.0-ass0.hex --target COM4 --force
 
 # Show progress during upload
-HarpRegulator upload firmware.hex --target COM4 --progress
+HarpRegulator upload Behavior-fw3.3-harp1.15-hw2.0-ass0.hex --target COM4 --progress
 ```
 
 ### Inspect a firmware file
@@ -92,10 +103,10 @@ HarpRegulator upload firmware.hex --target COM4 --progress
 HarpRegulator inspect firmware.uf2
 
 # Inspect Intel HEX firmware
-HarpRegulator inspect firmware.hex
+HarpRegulator inspect Behavior-fw3.3-harp1.15-hw2.0-ass0.hex
 
 # JSON output
-HarpRegulator inspect firmware.hex --json
+HarpRegulator inspect Behavior-fw3.3-harp1.15-hw2.0-ass0.hex --json
 ```
 
 ## Building
